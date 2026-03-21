@@ -1,0 +1,301 @@
+{
+    "manage_group": {
+        "description": "管理群",
+        "type": "string",
+        "hint": "bot收到的投稿将在管理群里审批, 不填则将审批信息私发给bot管理员"
+    },
+    "pillowmd_style_dir": {
+        "description": "Pillowmd样式目录路径",
+        "type": "string",
+        "hint": "例如 C:\\styles\\my-style 或 /data/styles/default, 留空则使用默认样式。pillowmd用于渲染说说内容",
+        "default": "data/plugins/astrbot_plugin_qzone/default_style"
+    },
+    "llm": {
+        "description": "LLM模块配置（用于手动发说说、评论、回复）",
+        "type": "object",
+        "items": {
+            "post_provider_id": {
+                "description": "写说说用的LLM提供商",
+                "type": "string",
+                "default": "",
+                "_special": "select_provider"
+            },
+            "post_prompt": {
+                "description": "写说说用的llm提示词",
+                "type": "text",
+                "default": "## 找出一个你感兴趣的主题来写一个段落。要求：- 首句抛出一个备受争议的问题。- 必须围绕抛出的问题进行展开, 无关内容不要硬塞。- 剖析问题后不做总结, 而是留下个更深层次的叩问。- 充满思辨, 保证逻辑性。- 每个单句都换行, 方便阅读"
+            },
+            "comment_provider_id": {
+                "description": "评论说说用的LLM提供商",
+                "type": "string",
+                "default": "",
+                "_special": "select_provider"
+            },
+            "comment_prompt": {
+                "description": "评论说说用的llm提示词",
+                "type": "text",
+                "default": "生成一句简短、直接、贴题、犀利的评论, 不要解释、不做自我描述、不分选项"
+            },
+            "reply_provider_id": {
+                "description": "回复评论用的LLM提供商",
+                "type": "string",
+                "default": "",
+                "_special": "select_provider"
+            },
+            "reply_prompt": {
+                "description": "回复评论用的llm提示词",
+                "type": "text",
+                "default": "这条帖子收到了一条评论，请回复此条评论, 不要解释、不做自我描述、不分选项"
+            }
+        }
+    },
+    "source": {
+        "description": "数据来源配置",
+        "type": "object",
+        "items": {
+            "ignore_groups": {
+                "description": "忽略的群聊列表",
+                "type": "list",
+                "default": []
+            },
+            "ignore_users": {
+                "description": "忽略的用户列表",
+                "type": "list",
+                "default": []
+            },
+            "post_max_msg": {
+                "description": "用于写说说的聊天记录的最大条数",
+                "type": "int",
+                "slider": {"min": 100, "max": 1000, "step": 10},
+                "default": 500
+            }
+        }
+    },
+    "auto_publish": {
+        "description": "普通说说自动发布配置",
+        "type": "object",
+        "items": {
+            "enabled": {
+                "description": "是否启用自动发布",
+                "type": "bool",
+                "default": false
+            },
+            "llm_provider_id": {
+                "description": "使用的LLM提供商（留空则使用 post_provider_id）",
+                "type": "string",
+                "default": "",
+                "_special": "select_provider"
+            },
+            "prompt": {
+                "description": "自定义提示词（留空则使用 post_prompt）",
+                "type": "text",
+                "default": ""
+            },
+            "schedule_type": {
+                "description": "发布频率",
+                "type": "string",
+                "enum": ["daily", "weekly"],
+                "default": "daily",
+                "hint": "daily: 每天发布一次；weekly: 每周随机选择几天发布（天数由下方设置）"
+            },
+            "days_per_week": {
+                "description": "每周随机发布的天数",
+                "type": "int",
+                "default": 1,
+                "slider": {"min": 1, "max": 7, "step": 1},
+                "hint": "仅当发布频率为 weekly 时生效，表示每周随机选取的天数"
+            },
+            "time_type": {
+                "description": "时间类型",
+                "type": "string",
+                "enum": ["range", "random"],
+                "default": "range",
+                "hint": "range: 在指定时间范围内随机; random: 全天任意时间随机"
+            },
+            "time_range_start": {
+                "description": "当 time_type 为 range 时，开始时间 (HH:MM)",
+                "type": "string",
+                "default": "23:00"
+            },
+            "time_range_end": {
+                "description": "当 time_type 为 range 时，结束时间 (HH:MM)",
+                "type": "string",
+                "default": "24:00"
+            }
+        }
+    },
+    "emo_mode": {
+        "description": "半夜emo动态模式",
+        "type": "object",
+        "items": {
+            "enabled": {
+                "description": "是否启用emo动态",
+                "type": "bool",
+                "default": false
+            },
+            "llm_provider_id": {
+                "description": "使用的LLM提供商（留空则使用 post_provider_id）",
+                "type": "string",
+                "default": "",
+                "_special": "select_provider"
+            },
+            "prompt": {
+                "description": "emo动态的LLM提示词",
+                "type": "text",
+                "default": "请写一段深夜emo风格的短文，表达孤独、失落、感慨时光流逝等情绪，语言优美，充满诗意。"
+            },
+            "probability": {
+                "description": "每天触发概率 (0-1)",
+                "type": "float",
+                "default": 0.1,
+                "slider": {"min": 0, "max": 1, "step": 0.01}
+            },
+            "time_type": {
+                "description": "时间类型",
+                "type": "string",
+                "enum": ["range", "random"],
+                "default": "range"
+            },
+            "time_range_start": {
+                "description": "当 time_type 为 range 时，开始时间 (HH:MM)",
+                "type": "string",
+                "default": "00:00"
+            },
+            "time_range_end": {
+                "description": "当 time_type 为 range 时，结束时间 (HH:MM)",
+                "type": "string",
+                "default": "06:00"
+            }
+        }
+    },
+    "adult_mode": {
+        "description": "小黄文模式（连载小说）",
+        "type": "object",
+        "items": {
+            "enabled": {
+                "description": "是否启用小黄文自动发布",
+                "type": "bool",
+                "default": false
+            },
+            "llm_provider_id": {
+                "description": "使用的LLM提供商（留空则使用 post_provider_id）",
+                "type": "string",
+                "default": "",
+                "_special": "select_provider"
+            },
+            "prompt": {
+                "description": "小黄文的背景设定和风格提示词（不会被压缩）",
+                "type": "text",
+                "default": "请写一段成人向的短文，内容含蓄但带有暗示，用文学化的手法描写情感与欲望。这是一个连载故事，请保持情节连贯。"
+            },
+            "schedule_type": {
+                "description": "发布频率",
+                "type": "string",
+                "enum": ["daily", "weekly"],
+                "default": "daily",
+                "hint": "daily: 每天发布一次；weekly: 每周随机选择几天发布（天数由下方设置）"
+            },
+            "days_per_week": {
+                "description": "每周随机发布的天数",
+                "type": "int",
+                "default": 1,
+                "slider": {"min": 1, "max": 7, "step": 1},
+                "hint": "仅当发布频率为 weekly 时生效，表示每周随机选取的天数"
+            },
+            "time_type": {
+                "description": "时间类型",
+                "type": "string",
+                "enum": ["range", "random"],
+                "default": "range"
+            },
+            "time_range_start": {
+                "description": "开始时间 (HH:MM)",
+                "type": "string",
+                "default": "20:00"
+            },
+            "time_range_end": {
+                "description": "结束时间 (HH:MM)",
+                "type": "string",
+                "default": "22:00"
+            },
+            "target_word_count": {
+                "description": "每次发布的目标字数（约）",
+                "type": "int",
+                "default": 2000,
+                "slider": {"min": 500, "max": 5000, "step": 100}
+            },
+            "max_history_chars": {
+                "description": "累积历史的最大字符数（超过后自动压缩）",
+                "type": "int",
+                "default": 10000,
+                "slider": {"min": 2000, "max": 20000, "step": 500}
+            },
+            "keep_recent_chapters": {
+                "description": "压缩时保留的最近章节数量（全文）",
+                "type": "int",
+                "default": 2,
+                "slider": {"min": 1, "max": 5, "step": 1}
+            }
+        }
+    },
+    "cookies_str": {
+        "description": "QQ Cookies",
+        "type": "text",
+        "default": ""
+    },
+    "timeout": {
+        "description": "请求超时时间",
+        "type": "int",
+        "slider": {"min": 5, "max": 60, "step": 1},
+        "default": 10
+    },
+    "show_name": {
+        "description": "是否显示昵称",
+        "type": "bool",
+        "default": true
+    },
+    "trigger": {
+        "description": "自动评论与回复配置",
+        "type": "object",
+        "items": {
+            "enabled": {
+                "description": "是否启用自动评论功能",
+                "type": "bool",
+                "default": true,
+                "hint": "关闭后，定时自动评论和聊天时随机评论都不会触发"
+            },
+            "comment_cron": {
+                "description": "定时自动评论的基准触发时间",
+                "type": "string",
+                "default": "0 8 * * *",
+                "hint": "Cron 表达式（分 时 日 月 周），实际执行时间会加上随机偏移。留空则不启用定时评论"
+            },
+            "comment_offset": {
+                "description": "定时自动评论的时间偏移（秒）",
+                "type": "int",
+                "default": 600,
+                "slider": {"min": 0, "max": 3600, "step": 1},
+                "hint": "基准时间前后随机浮动的秒数"
+            },
+            "read_prob": {
+                "description": "聊天时触发评说说的概率",
+                "type": "float",
+                "default": 0.001,
+                "slider": {"min": 0, "max": 1, "step": 0.0001},
+                "hint": "用户在群聊/私聊时，以该概率随机评论对方最近一条说说"
+            },
+            "send_admin": {
+                "description": "触发评说说时仅通知管理员",
+                "type": "bool",
+                "default": false,
+                "hint": "若开启，则评论结果只会私发给bot管理员，不会发到群聊"
+            },
+            "like_when_comment": {
+                "description": "评说说时是否自动点赞",
+                "type": "bool",
+                "default": true,
+                "hint": "在评论的同时点赞该说说"
+            }
+        }
+    }
+}
