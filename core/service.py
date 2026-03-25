@@ -41,10 +41,25 @@ class PostService:
         self.session = session
         self.db = db
         self.llm = llm
+        self.sender = None  # 将在 main.py 中设置
 
-    # ============================================================
-    # 业务接口
-    # ============================================================
+    # ========== 统一错误映射 ==========
+    def _map_api_error(self, resp, operation: str = "操作") -> str:
+        """统一处理 Qzone API 错误"""
+        if resp.ok:
+            return None
+        message = str(resp.message or "").strip()
+        code = resp.code
+
+        if code == QZONE_CODE_LOGIN_EXPIRED:
+            return "登录状态失效，请重新登录后重试"
+        if code in (QZONE_CODE_PERMISSION_DENIED, QZONE_CODE_PERMISSION_DENIED_LEGACY):
+            return f"{operation}失败：权限不足"
+        if message:
+            return f"{operation}失败：{message}"
+        return f"{operation}失败：code={code}"
+
+    # ========== 业务接口 ==========
 
     async def query_feeds(
         self,
@@ -213,7 +228,8 @@ class PostService:
         """查看访客"""
         resp = await self.qzone.get_visitor()
         if not resp.ok:
-            raise RuntimeError(f"获取访客异常：{resp.data}")
+            error_msg = self._map_api_error(resp, "获取访客")
+            raise RuntimeError(error_msg)
         if not resp.data:
             raise RuntimeError("无访客记录")
         return QzoneParser.parse_visitors(resp.data)
@@ -222,7 +238,10 @@ class PostService:
         """点赞帖子"""
         if not post.tid:
             raise ValueError("帖子 tid 为空")
-        await self.qzone.like(post)
+        resp = await self.qzone.like(post)
+        if not resp.ok:
+            error_msg = self._map_api_error(resp, "点赞")
+            raise RuntimeError(error_msg)
         logger.info(f"已点赞 → {post.name}")
 
     async def comment_posts(self, post: Post):
@@ -234,7 +253,10 @@ class PostService:
         if not content:
             raise ValueError("生成评论内容为空")
 
-        await self.qzone.comment(post, content)
+        resp = await self.qzone.comment(post, content)
+        if not resp.ok:
+            error_msg = self._map_api_error(resp, "评论")
+            raise RuntimeError(error_msg)
 
         uin = await self.session.get_uin()
         name = await self.session.get_nickname()
@@ -274,7 +296,8 @@ class PostService:
 
         resp = await self.qzone.reply(post, comment, content)
         if not resp.ok:
-            raise RuntimeError(resp.message)
+            error_msg = self._map_api_error(resp, "回复")
+            raise RuntimeError(error_msg)
 
         name = await self.session.get_nickname()
         post.comments.append(
@@ -288,6 +311,8 @@ class PostService:
         )
         await self.db.save(post)
 
+    # ========== 发布方法（集成图像生成） ==========
+
     async def publish_post(
         self,
         *,
@@ -295,6 +320,7 @@ class PostService:
         text: str | None = None,
         images: list | None = None,
     ) -> Post:
+        """发布说说（支持图像生成）"""
         if post is None and not text and not images:
             raise ValueError("post、text、images 不能同时为空")
 
@@ -308,9 +334,34 @@ class PostService:
                 images=images or [],
             )
 
+        cfg = self.session.cfg
+
+        # 图像生成：如果没有手动上传图片且文生图已启用
+        if not post.images and cfg.image_gen.text_to_image.enabled:
+            # 获取参考图（用于图生图，如果配置了参考图）
+            ref_bytes = None
+            ref_url = cfg.image_gen.common.reference_image_url
+            if ref_url:
+                ref_bytes = await self.llm.download_file(ref_url)
+
+            generated_images = await self.llm.generate_images_for_post(
+                text=post.text,
+                reference_image_bytes=ref_bytes,
+            )
+
+            # 保存生成的图片到缓存并添加到 post.images
+            for i, img_bytes in enumerate(generated_images):
+                img_path = cfg.cache_dir / f"gen_{int(time.time()*1000)}_{i}.png"
+                with open(img_path, "wb") as f:
+                    f.write(img_bytes)
+                post.images.append(str(img_path))
+                logger.info(f"生成图片已保存: {img_path}")
+
+        # 发布
         resp = await self.qzone.publish(post)
         if not resp.ok:
-            raise RuntimeError(f"发布说说失败：{resp.data}")
+            error_msg = self._map_api_error(resp, "发布说说")
+            raise RuntimeError(error_msg)
 
         post.tid = resp.data.get("tid")
         post.status = "approved"
@@ -319,25 +370,16 @@ class PostService:
         await self.db.save(post)
         return post
 
-    async def delete_post(self, post: Post):
-        if not post.tid:
-            raise ValueError("帖子 tid 为空")
-        await self.qzone.delete(post.tid)
-        if post.id:
-            await self.db.delete(post.id)
-
     async def publish_emo(self) -> Post:
-        """发布一条emo风格说说（使用emo_mode配置）"""
+        """发布emo动态（带图像生成）"""
         cfg = self.session.cfg
         emo_cfg = cfg.emo_mode
         if not emo_cfg.enabled:
             raise RuntimeError("emo模式未启用，请在配置中启用")
 
-        # 使用的 LLM 提供商和提示词
         provider_id = emo_cfg.llm_provider_id or cfg.llm.post_provider_id
         prompt = emo_cfg.prompt
 
-        # 生成内容（不需要群聊上下文，无主题）
         text = await self.llm.generate_post(
             group_id="",
             topic="",
@@ -347,7 +389,6 @@ class PostService:
         if not text:
             raise ValueError("生成emo内容为空")
 
-        # 发布
         uin = await self.session.get_uin()
         name = await self.session.get_nickname()
         post = Post(
@@ -355,15 +396,51 @@ class PostService:
             name=name,
             text=text,
             status="approved",
+            images=[],
         )
+
+        # emo 图像生成
+        if cfg.image_gen.text_to_image.enabled:
+            ref_bytes = None
+            ref_url = cfg.image_gen.common.reference_image_url
+            if ref_url:
+                ref_bytes = await self.llm.download_file(ref_url)
+
+            img_bytes = await self.llm.generate_emo_image(
+                text=post.text,
+                reference_image_bytes=ref_bytes,
+            )
+
+            if img_bytes:
+                img_path = cfg.cache_dir / f"emo_{int(time.time()*1000)}.png"
+                with open(img_path, "wb") as f:
+                    f.write(img_bytes)
+                post.images.append(str(img_path))
+                logger.info(f"emo图片已保存: {img_path}")
+
+        # 发布
         resp = await self.qzone.publish(post)
         if not resp.ok:
-            raise RuntimeError(f"发布emo动态失败：{resp.data}")
+            error_msg = self._map_api_error(resp, "发布emo动态")
+            raise RuntimeError(error_msg)
 
         post.tid = resp.data.get("tid")
         post.create_time = resp.data.get("now", int(time.time()))
         await self.db.save(post)
         return post
+
+    async def delete_post(self, post: Post):
+        """删除帖子"""
+        if not post.tid:
+            raise ValueError("帖子 tid 为空")
+        resp = await self.qzone.delete(post.tid)
+        if not resp.ok:
+            error_msg = self._map_api_error(resp, "删除说说")
+            raise RuntimeError(error_msg)
+        if post.id:
+            await self.db.delete(post.id)
+
+    # ========== 小说连载 ==========
 
     async def publish_novel_chapter(self) -> Post:
         """发布小说新章节（自动管理上下文）"""
@@ -391,9 +468,32 @@ class PostService:
             custom_provider_id=llm_provider,
         )
 
-        # 发布到空间
+        # 先将正文发送给管理员预览
+        logger.info(f"小说章节已生成，长度: {len(chapter_text)}，发送给管理员预览")
+
         uin = await self.session.get_uin()
         name = await self.session.get_nickname()
+        preview_post = Post(
+            uin=uin,
+            name=name,
+            text=chapter_text,
+            status="approved",
+        )
+
+        # 发送给管理员预览（如果 sender 已设置）
+        if self.sender:
+            try:
+                await self.sender.send_admin_post(
+                    preview_post,
+                    message=f"小黄文新章节预览（共{len(chapter_text)}字）",
+                    reply=False
+                )
+            except Exception as e:
+                logger.error(f"发送预览失败: {e}")
+        else:
+            logger.warning("sender 未设置，无法发送预览")
+
+        # 发布到空间
         post = Post(
             uin=uin,
             name=name,
@@ -402,40 +502,47 @@ class PostService:
         )
         resp = await self.qzone.publish(post)
         if not resp.ok:
-            raise RuntimeError(f"发布小说章节失败：{resp.data}")
+            error_msg = self._map_api_error(resp, "发布小说章节")
+            raise RuntimeError(error_msg)
 
         post.tid = resp.data.get("tid")
         post.create_time = resp.data.get("now", int(time.time()))
         await self.db.save(post)
 
-        # 存储章节到历史表（用于追溯）
-        last = await self.db.get_last_novel_chapter()
-        chapter_num = (last["chapter_num"] + 1) if last else 1
-        await self.db.add_novel_chapter(chapter_num, chapter_text, chapter_summary)
+        # 存储章节到历史表（用于追溯）- 独立处理，不影响主流程
+        try:
+            last = await self.db.get_last_novel_chapter()
+            chapter_num = (last["chapter_num"] + 1) if last else 1
+            await self.db.add_novel_chapter(chapter_num, chapter_text, chapter_summary)
+        except Exception as e:
+            logger.error(f"保存小说历史失败: {e}")
 
-        # 更新上下文
-        new_recent = recent_chapters + [chapter_text]
-        background_len = len(background_prompt)
-        summary_len = len(summary)
-        recent_len = sum(len(c) for c in new_recent)
-        new_total_chars = background_len + summary_len + recent_len
+        # 更新上下文 - 独立处理，不影响主流程
+        try:
+            new_recent = recent_chapters + [chapter_text]
+            background_len = len(background_prompt)
+            summary_len = len(summary)
+            recent_len = sum(len(c) for c in new_recent)
+            new_total_chars = background_len + summary_len + recent_len
 
-        if new_total_chars > max_chars and len(new_recent) > keep_recent:
-            # 需要压缩
-            to_compress_summary = summary
-            to_compress_chapters = new_recent[:-keep_recent]
-            new_recent = new_recent[-keep_recent:]
+            if new_total_chars > max_chars and len(new_recent) > keep_recent:
+                # 需要压缩
+                to_compress_summary = summary
+                to_compress_chapters = new_recent[:-keep_recent]
+                new_recent = new_recent[-keep_recent:]
 
-            new_summary = await self.llm.compress_history(
-                background_prompt=background_prompt,
-                old_summary=to_compress_summary,
-                old_chapters=to_compress_chapters,
-                custom_provider_id=llm_provider,
-            )
-            new_total_chars = background_len + len(new_summary) + sum(len(c) for c in new_recent)
-        else:
-            new_summary = summary
+                new_summary = await self.llm.compress_history(
+                    background_prompt=background_prompt,
+                    old_summary=to_compress_summary,
+                    old_chapters=to_compress_chapters,
+                    custom_provider_id=llm_provider,
+                )
+                new_total_chars = background_len + len(new_summary) + sum(len(c) for c in new_recent)
+            else:
+                new_summary = summary
 
-        await self.db.update_novel_context(new_summary, new_recent, new_total_chars)
+            await self.db.update_novel_context(new_summary, new_recent, new_total_chars)
+        except Exception as e:
+            logger.error(f"更新小说上下文失败: {e}")
 
         return post

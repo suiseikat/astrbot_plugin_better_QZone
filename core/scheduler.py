@@ -95,22 +95,31 @@ class AutoComment(BaseTask):
 
     async def execute(self):
         try:
+            # 获取最新未评论过的说说（最多20条）
             posts = await self.service.query_feeds(
                 pos=0,
                 num=20,
                 no_self=True,
                 no_commented=True,
             )
-            for post in posts:
-                try:
-                    await self.service.comment_posts(post)
-                    if self.config.trigger.like_when_comment:
-                        await self.service.like_posts(post)
-                    await self.sender.send_admin_post(post, message="定时读说说")
-                except Exception as e:
-                    logger.exception(f"[AutoComment] 跳过说说评论失败: tid={post.tid}, uin={post.uin}, name={post.name}, error={e}")
         except Exception as e:
-            logger.exception(f"[AutoComment] 任务执行失败: {e}")
+            logger.exception(f"[{self.name}] 查询说说失败: {e}")
+            return
+
+        for post in posts:
+            try:
+                await self.service.comment_posts(post)
+                if self.config.trigger.like_when_comment:
+                    await self.service.like_posts(post)
+            except Exception as e:
+                logger.exception(f"[{self.name}] 评论失败: tid={post.tid}, uin={post.uin}, name={post.name}, error={e}")
+                continue
+
+            # 通知独立处理，不影响主流程
+            try:
+                await self.sender.send_admin_post(post, message="定时读说说", reply=False)
+            except Exception as e:
+                logger.error(f"[{self.name}] 通知发送失败: {e}")
 
 
 class RandomTimeTask(BaseTask):
@@ -140,7 +149,12 @@ class RandomTimeTask(BaseTask):
         today = now.date()
 
         if self.schedule_type == "daily":
-            return today if now.hour < 23 else today + timedelta(days=1)
+            # 计算今天的随机时间
+            target_time_today = self._get_time_of_day(today)
+            if target_time_today <= now:
+                # 今天的时间已过，返回明天
+                return today + timedelta(days=1)
+            return today
 
         elif self.schedule_type == "weekly":
             week_start = today - timedelta(days=today.weekday())
@@ -166,18 +180,24 @@ class RandomTimeTask(BaseTask):
             hour = random.randint(0, 23)
             minute = random.randint(0, 59)
             second = random.randint(0, 59)
-            return datetime.combine(date, datetime.min.time().replace(hour=hour, minute=minute, second=second))
+            dt = datetime.combine(date, datetime.min.time().replace(hour=hour, minute=minute, second=second))
         elif self.time_type == "range":
-            start = datetime.strptime(self.time_range_start, "%H:%M").time()
-            end = datetime.strptime(self.time_range_end, "%H:%M").time()
+            start_str = self.time_range_start
+            end_str = self.time_range_end
+            # 处理 24:00 特殊值（转换为 23:59）
+            if end_str == "24:00":
+                end_str = "23:59"
+            start = datetime.strptime(start_str, "%H:%M").time()
+            end = datetime.strptime(end_str, "%H:%M").time()
             seconds = random.randint(
                 int(start.hour * 3600 + start.minute * 60),
                 int(end.hour * 3600 + end.minute * 60)
             )
             dt = datetime.combine(date, datetime.min.time()) + timedelta(seconds=seconds)
-            return dt
         else:
             raise ValueError(f"不支持的 time_type: {self.time_type}")
+        # 添加时区信息，使其与 datetime.now(config.timezone) 一致
+        return dt.replace(tzinfo=self.config.timezone)
 
     async def schedule_next(self):
         next_date = self._get_next_date()
@@ -214,9 +234,15 @@ class AutoPublishTask(RandomTimeTask):
                 logger.warning(f"[{self.name}] 生成内容为空，跳过")
                 return
             post = await self.service.publish_post(text=text)
-            await self.sender.send_admin_post(post, message="定时发说说")
         except Exception as e:
             logger.exception(f"[{self.name}] 发布失败: {e}")
+            return
+
+        # 通知独立处理
+        try:
+            await self.sender.send_admin_post(post, message="定时发说说", reply=False)
+        except Exception as e:
+            logger.error(f"[{self.name}] 通知发送失败: {e}")
 
 
 class EmoProbTask(BaseTask):
@@ -241,18 +267,24 @@ class EmoProbTask(BaseTask):
             logger.info(f"[{self.name}] 今日触发概率命中，将安排执行")
             target_date = now.date()
             if self.cfg.time_type == "range":
-                start = datetime.strptime(self.cfg.time_range_start, "%H:%M").time()
-                end = datetime.strptime(self.cfg.time_range_end, "%H:%M").time()
+                start_str = self.cfg.time_range_start
+                end_str = self.cfg.time_range_end
+                if end_str == "24:00":
+                    end_str = "23:59"
+                start = datetime.strptime(start_str, "%H:%M").time()
+                end = datetime.strptime(end_str, "%H:%M").time()
                 seconds = random.randint(
                     int(start.hour * 3600 + start.minute * 60),
                     int(end.hour * 3600 + end.minute * 60)
                 )
                 target_time = datetime.combine(target_date, datetime.min.time()) + timedelta(seconds=seconds)
-            else:
+            else:  # random
                 hour = random.randint(0, 23)
                 minute = random.randint(0, 59)
                 second = random.randint(0, 59)
                 target_time = datetime.combine(target_date, datetime.min.time().replace(hour=hour, minute=minute, second=second))
+            # 添加时区
+            target_time = target_time.replace(tzinfo=self.config.timezone)
             if target_time <= now:
                 target_time += timedelta(days=1)
             self._schedule_at(target_time)
@@ -273,9 +305,15 @@ class EmoProbTask(BaseTask):
                 logger.warning(f"[{self.name}] 生成内容为空，跳过")
                 return
             post = await self.service.publish_post(text=text)
-            await self.sender.send_admin_post(post, message="emo动态")
         except Exception as e:
             logger.exception(f"[{self.name}] 发布失败: {e}")
+            return
+
+        # 通知独立处理
+        try:
+            await self.sender.send_admin_post(post, message="emo动态", reply=False)
+        except Exception as e:
+            logger.error(f"[{self.name}] 通知发送失败: {e}")
 
 
 class AdultNovelTask(RandomTimeTask):
@@ -297,6 +335,12 @@ class AdultNovelTask(RandomTimeTask):
     async def execute(self):
         try:
             post = await self.service.publish_novel_chapter()
-            await self.sender.send_admin_post(post, message="小黄文连载")
         except Exception as e:
             logger.exception(f"[{self.name}] 发布失败: {e}")
+            return
+
+        # 通知独立处理
+        try:
+            await self.sender.send_admin_post(post, message="小黄文连载", reply=False)
+        except Exception as e:
+            logger.error(f"[{self.name}] 通知发送失败: {e}")

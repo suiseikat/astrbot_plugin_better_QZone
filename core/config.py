@@ -159,6 +159,42 @@ class AdultModeConfig(ConfigNode):
     keep_recent_chapters: int
 
 
+# ========== 图像生成配置 ==========
+class TextToImageConfig(ConfigNode):
+    enabled: bool
+    api_key: str
+    model: str
+    size: str
+    num_inference_steps: int
+    cfg_scale: float
+    num_images: int
+    prompt_suffix: str
+
+
+class ImageToImageConfig(ConfigNode):
+    enabled: bool
+    api_key: str
+    model: str
+    size: str
+    num_inference_steps: int
+    cfg_scale: float
+    return_image_quality: int
+    prompt_suffix: str
+    reference_images: list[str]          # 新增：参考图文件路径列表
+    reference_image_strategy: str        # 新增：多图使用策略 (first/random/round_robin)
+
+
+class ImageGenCommonConfig(ConfigNode):
+    auto_publish_probability: float
+    emo_probability: float
+
+
+class ImageGenConfig(ConfigNode):
+    text_to_image: TextToImageConfig
+    image_to_image: ImageToImageConfig
+    common: ImageGenCommonConfig
+
+
 class PluginConfig(ConfigNode):
     manage_group: str
     pillowmd_style_dir: str
@@ -168,6 +204,7 @@ class PluginConfig(ConfigNode):
     auto_publish: AutoPublishConfig
     emo_mode: EmoModeConfig
     adult_mode: AdultModeConfig
+    image_gen: ImageGenConfig
     cookies_str: str
     timeout: int
     show_name: bool

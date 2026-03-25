@@ -1,3 +1,5 @@
+# core/sender.py
+
 from aiocqhttp import CQHttp
 
 from astrbot.api import logger
@@ -19,7 +21,6 @@ class Sender:
         self._load_renderer()
 
     def _load_renderer(self):
-        # 实例化pillowmd样式
         try:
             import pillowmd
 
@@ -72,6 +73,7 @@ class Sender:
         *,
         client: CQHttp | None = None,
         message: str = "",
+        reply: bool = False,  # 新增参数，控制是否使用引用回复
     ):
         """通知管理群或管理员"""
         client = client or self.cfg.client
@@ -85,7 +87,18 @@ class Sender:
         post_seg = await self._post_to_seg(post)
         chain.append(post_seg)
 
-        obmsg = await AiocqhttpMessageEvent._parse_onebot_json(MessageChain(chain))
+        # 根据 reply 参数决定如何构造消息
+        if not reply:
+            # 定时任务场景：不构造引用，直接发普通消息
+            obmsg = []
+            for seg in chain:
+                if isinstance(seg, Plain):
+                    obmsg.append({"type": "text", "data": {"text": seg.text}})
+                elif isinstance(seg, Image):
+                    obmsg.append({"type": "image", "data": {"file": seg.file}})
+        else:
+            # 命令触发场景：使用原有的引用解析
+            obmsg = await AiocqhttpMessageEvent._parse_onebot_json(MessageChain(chain))
 
         succ = False
         if self.cfg.manage_group:
