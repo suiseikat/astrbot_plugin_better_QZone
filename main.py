@@ -1,5 +1,8 @@
+# main.py
+
 import random
 import shutil
+import time
 
 from astrbot.api import logger
 from astrbot.api.event import filter
@@ -38,18 +41,20 @@ class QzonePlugin(Star):
         self.sender = Sender(self.cfg)
         # 操作服务
         self.service = PostService(self.qzone, self.session, self.db, self.llm)
+        # 设置 service 的 sender 属性
+        self.service.sender = self.sender
         # 表白墙
         self.campus_wall = CampusWall(self.cfg, self.service, self.db, self.sender)
         # 自动评论模块
         self.auto_comment: AutoComment | None = None
-        # 自动发布任务列表
-        self.auto_tasks: list = []
+        # 自动任务列表
+        self.auto_tasks = []
 
     async def initialize(self):
         """插件加载时触发"""
         await self.db.initialize()
 
-        # 自动评论（如果启用且配置了cron）
+        # 自动评论（保留）
         if self.cfg.trigger.enabled and self.cfg.trigger.comment_cron:
             if not self.auto_comment:
                 self.auto_comment = AutoComment(self.cfg, self.service, self.sender)
@@ -93,12 +98,14 @@ class QzonePlugin(Star):
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def prob_read_feed(self, event: AiocqhttpMessageEvent):
-        """监听消息，按概率触发读说说"""
-        if not self.cfg.trigger.enabled:
-            return
+        """监听消息"""
         if not self.cfg.client:
             self.cfg.client = event.bot
             logger.debug("QQ空间所需的 CQHttp 客户端已初始化")
+
+        # 按概率触发点赞+评论
+        if not self.cfg.trigger.enabled:
+            return
 
         sender_id = event.get_sender_id()
         if (
@@ -106,14 +113,24 @@ class QzonePlugin(Star):
             and random.random() < self.cfg.trigger.read_prob
         ):
             target_id = event.get_sender_id()
-            posts = await self.service.query_feeds(
-                target_id=target_id, pos=0, num=1, no_self=True, no_commented=True
-            )
+            try:
+                posts = await self.service.query_feeds(
+                    target_id=target_id, pos=0, num=1, no_self=True, no_commented=True
+                )
+            except Exception as e:
+                logger.error(f"查询说说失败: {e}")
+                return
+
             for post in posts:
                 try:
                     await self.service.comment_posts(post)
                     if self.cfg.trigger.like_when_comment:
                         await self.service.like_posts(post)
+                except Exception as e:
+                    logger.error(f"评论失败: {e}")
+                    continue
+
+                try:
                     await self.sender.send_post(
                         event,
                         post,
@@ -121,7 +138,7 @@ class QzonePlugin(Star):
                         send_admin=self.cfg.trigger.send_admin,
                     )
                 except Exception as e:
-                    logger.error(e)
+                    logger.error(f"发送通知失败: {e}")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("查看访客")
@@ -133,6 +150,7 @@ class QzonePlugin(Star):
         except Exception as e:
             yield event.plain_result(str(e))
             logger.error(e)
+        event.stop_event()
 
     async def _get_posts(
         self,
@@ -174,7 +192,9 @@ class QzonePlugin(Star):
 
     @filter.command("看说说", alias={"查看说说"})
     async def view_feed(self, event: AiocqhttpMessageEvent):
-        """看说说 <@群友> <序号>"""
+        """
+        看说说 <@群友> <序号>
+        """
         posts = await self._get_posts(event, with_detail=True)
         for post in posts:
             await self.sender.send_post(event, post)
@@ -192,8 +212,9 @@ class QzonePlugin(Star):
                     msg += "并点赞"
                 await self.sender.send_post(event, post, message=msg)
             except Exception as e:
-                await event.send(event.plain_result(str(e)))
+                yield event.plain_result(str(e))
                 logger.error(e)
+                event.stop_event()
 
     @filter.command("赞说说")
     async def like_feed(self, event: AiocqhttpMessageEvent):
@@ -204,8 +225,9 @@ class QzonePlugin(Star):
                 await self.service.like_posts(post)
                 await self.sender.send_post(event, post, message="已点赞")
             except Exception as e:
-                await event.send(event.plain_result(str(e)))
+                yield event.plain_result(str(e))
                 logger.error(e)
+                event.stop_event()
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("发说说")
@@ -216,32 +238,10 @@ class QzonePlugin(Star):
         try:
             post = await self.service.publish_post(text=text, images=images)
             await self.sender.send_post(event, post, message="已发布")
-            event.stop_event()
         except Exception as e:
             yield event.plain_result(str(e))
             logger.error(e)
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("发emo")
-    async def publish_emo(self, event: AiocqhttpMessageEvent):
-        """发emo：AI生成一篇emo风格说说并发布"""
-        try:
-            post = await self.service.publish_emo()
-            await self.sender.send_post(event, post, message="已发布emo动态")
-        except Exception as e:
-            yield event.plain_result(str(e))
-            logger.error(e)
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("发小黄文")
-    async def publish_adult_chapter(self, event: AiocqhttpMessageEvent):
-        """发小黄文：生成并发布新一章连载小说"""
-        try:
-            post = await self.service.publish_novel_chapter()
-            await self.sender.send_post(event, post, message="已发布新章节")
-        except Exception as e:
-            yield event.plain_result(str(e))
-            logger.error(e)
+        event.stop_event()
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("写说说", alias={"写稿"})
@@ -254,11 +254,26 @@ class QzonePlugin(Star):
         except Exception as e:
             yield event.plain_result(str(e))
             logger.error(e)
+            event.stop_event()
             return
+
         images = await get_image_urls(event)
+
+        # 如果启用了文生图且没有手动上传图片，生成图片
+        if not images and self.cfg.image_gen.text_to_image.enabled:
+            generated_images = await self.llm.generate_images_for_post(text=text)
+            for i, img_bytes in enumerate(generated_images):
+                img_path = self.cfg.cache_dir / f"gen_{int(time.time()*1000)}_{i}.png"
+                with open(img_path, "wb") as f:
+                    f.write(img_bytes)
+                images.append(str(img_path))
+                logger.info(f"生成图片已保存: {img_path}")
+
         if not text and not images:
             yield event.plain_result("说说生成失败")
+            event.stop_event()
             return
+
         self_id = event.get_self_id()
         post = Post(
             uin=int(self_id),
@@ -268,6 +283,7 @@ class QzonePlugin(Star):
         )
         await self.db.save(post)
         await self.sender.send_post(event, post)
+        event.stop_event()
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("删说说")
@@ -276,11 +292,13 @@ class QzonePlugin(Star):
         posts = await self._get_posts(event, target_id=event.get_self_id())
         for post in posts:
             try:
-                await self.sender.send_post(event, post, message="已删除说说")
+                # 先删除，成功后再通知
                 await self.service.delete_post(post)
+                await self.sender.send_post(event, post, message="已删除说说")
             except Exception as e:
-                await event.send(event.plain_result(str(e)))
+                yield event.plain_result(str(e))
                 logger.error(e)
+                event.stop_event()
 
     @filter.command("回评", alias={"回复评论"})
     async def reply_comment(
@@ -290,13 +308,15 @@ class QzonePlugin(Star):
         post = await self.db.get(post_id)
         if not post:
             yield event.plain_result(f"稿件#{post_id}不存在")
+            event.stop_event()
             return
         try:
             await self.service.reply_comment(post, index=comment_index)
             await self.sender.send_post(event, post, message="已回复评论")
         except Exception as e:
-            await event.send(event.plain_result(str(e)))
+            yield event.plain_result(str(e))
             logger.error(e)
+        event.stop_event()
 
     @filter.command("投稿")
     async def contribute_post(self, event: AiocqhttpMessageEvent):
@@ -335,6 +355,87 @@ class QzonePlugin(Star):
         async for msg in self.campus_wall.reject(event):
             yield msg
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("发emo")
+    async def publish_emo(self, event: AiocqhttpMessageEvent):
+        """发emo：AI生成一篇emo风格说说并发布（不发送任何通知）"""
+        try:
+            post = await self.service.publish_emo()
+            # 仅记录日志，不发送任何消息
+            logger.info(f"已发布emo动态，tid={post.tid}")
+        except Exception as e:
+            logger.error(f"发布emo失败: {e}")
+        finally:
+            # 停止事件传播，防止其他插件或框架自动回复
+            event.stop_event()
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("发小黄文")
+    async def publish_adult_chapter(self, event: AiocqhttpMessageEvent):
+        """发小黄文：生成并发布新一章连载小说（通知管理员）"""
+        try:
+            post = await self.service.publish_novel_chapter()
+            # 发送给管理员（管理群/管理员）
+            await self.sender.send_admin_post(post, message="已发布新章节", reply=False)
+            # 私聊通知用户
+            await event.bot.send_private_msg(
+                user_id=int(event.get_sender_id()),
+                message=f"✅ 已发布新章节\n📝 tid={post.tid}\n📄 内容：{post.text[:100]}..."
+            )
+        except Exception as e:
+            await event.bot.send_private_msg(
+                user_id=int(event.get_sender_id()),
+                message=f"❌ 发布失败：{str(e)}"
+            )
+            logger.error(e)
+        event.stop_event()
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("设置参考图")
+    async def set_reference_image(self, event: AiocqhttpMessageEvent):
+        """设置参考图（用于图生图）"""
+        images = await get_image_urls(event)
+        if not images:
+            await event.bot.send_private_msg(
+                user_id=int(event.get_sender_id()),
+                message="请发送一张图片作为参考图"
+            )
+            event.stop_event()
+            return
+
+        # 下载图片并保存
+        img_bytes = await self.llm.download_file(images[0])
+        if img_bytes:
+            # 保存到缓存目录
+            ref_path = self.cfg.cache_dir / "reference_image.png"
+            with open(ref_path, "wb") as f:
+                f.write(img_bytes)
+            # 更新配置
+            self.cfg.image_gen.image_to_image.reference_images = [str(ref_path)]
+            self.cfg.save_config()
+            await event.bot.send_private_msg(
+                user_id=int(event.get_sender_id()),
+                message=f"✅ 参考图已保存\n📁 路径: {ref_path}"
+            )
+        else:
+            await event.bot.send_private_msg(
+                user_id=int(event.get_sender_id()),
+                message="❌ 下载图片失败"
+            )
+        event.stop_event()
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("清除参考图")
+    async def clear_reference_image(self, event: AiocqhttpMessageEvent):
+        """清除参考图"""
+        self.cfg.image_gen.image_to_image.reference_images = []
+        self.cfg.save_config()
+        await event.bot.send_private_msg(
+            user_id=int(event.get_sender_id()),
+            message="✅ 参考图已清除"
+        )
+        event.stop_event()
+
     @filter.llm_tool()
     async def llm_view_feed(
         self,
@@ -344,7 +445,14 @@ class QzonePlugin(Star):
         like: bool = False,
         reply: bool = False,
     ):
-        """查看、点赞、评论某位用户QQ空间的某条说说、动态"""
+        """
+        查看、点赞、评论某位用户QQ空间的某条说说、动态
+        Args:
+            user_id(string): 目标用户的QQ账号，必定为一串数字，如(12345678), 默认为当前用户QQ号
+            pos(number): 要查询的说说序号, 默认为0表示最新
+            like(boolean): 是否点赞
+            reply(boolean): 是否评论
+        """
         try:
             user_id = user_id or event.get_sender_id()
             logger.debug(f"正在查询用户（{user_id}）的第 {pos} 条说说")
@@ -361,6 +469,7 @@ class QzonePlugin(Star):
 
             post = posts[0]
 
+            # 执行动作
             msg = ""
 
             if like and reply:
@@ -374,6 +483,7 @@ class QzonePlugin(Star):
                 await self.service.like_posts(post)
                 msg = "已点赞"
 
+            # 发送展示
             await self.sender.send_post(event, post, message=msg)
 
             return msg + "\n" + post.text + "\n" + "\n".join(post.images)
@@ -389,8 +499,23 @@ class QzonePlugin(Star):
         text: str = "",
         get_image: bool = True,
     ):
-        """写一篇说说并发布到QQ空间"""
+        """
+        写一篇说说并发布到QQ空间
+        Args:
+            text(string): 要发布的说说内容
+            get_image(boolean): 是否获取当前对话中的图片附加到说说里, 默认为True
+        """
         images = await get_image_urls(event) if get_image else []
+
+        # 如果启用了文生图且没有手动上传图片
+        if not images and self.cfg.image_gen.text_to_image.enabled:
+            generated_images = await self.llm.generate_images_for_post(text=text)
+            for i, img_bytes in enumerate(generated_images):
+                img_path = self.cfg.cache_dir / f"gen_{int(time.time()*1000)}_{i}.png"
+                with open(img_path, "wb") as f:
+                    f.write(img_bytes)
+                images.append(str(img_path))
+
         try:
             post = await self.service.publish_post(text=text, images=images)
             await self.sender.send_post(event, post, message="已发布")

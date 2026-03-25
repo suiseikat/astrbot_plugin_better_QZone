@@ -297,5 +297,157 @@
                 "hint": "在评论的同时点赞该说说"
             }
         }
+    },
+    "image_gen": {
+        "description": "图像生成配置（普通说说和emo共用）",
+        "type": "object",
+        "items": {
+            "text_to_image": {
+                "description": "文生图配置",
+                "type": "object",
+                "items": {
+                    "enabled": {
+                        "description": "是否启用文生图",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "api_key": {
+                        "description": "Gitee AI API Key",
+                        "type": "string",
+                        "default": "",
+                        "hint": "从 https://ai.gitee.com 获取"
+                    },
+                    "model": {
+                        "description": "模型名称",
+                        "type": "string",
+                        "default": "Qwen-Image",
+                        "hint": "推荐 Qwen-Image"
+                    },
+                    "size": {
+                        "description": "图片尺寸",
+                        "type": "string",
+                        "default": "2048x2048",
+                        "hint": "格式: 宽x高，如 1024x1024、2048x2048"
+                    },
+                    "num_inference_steps": {
+                        "description": "推理步数 (0-50)",
+                        "type": "int",
+                        "default": 4,
+                        "slider": {"min": 0, "max": 50, "step": 1},
+                        "hint": "步数越多质量越高但生成越慢，推荐 4-20"
+                    },
+                    "cfg_scale": {
+                        "description": "提示词引导比例 (0-20)",
+                        "type": "float",
+                        "default": 1.0,
+                        "slider": {"min": 0, "max": 20, "step": 0.5},
+                        "hint": "数值越高越贴近提示词，推荐 1-10"
+                    },
+                    "num_images": {
+                        "description": "每次生成的图片数量",
+                        "type": "int",
+                        "default": 1,
+                        "slider": {"min": 1, "max": 4, "step": 1},
+                        "hint": "普通说说可生成多张，emo只取第一张"
+                    },
+                    "prompt_suffix": {
+                        "description": "提示词后缀",
+                        "type": "text",
+                        "default": "",
+                        "hint": "添加到提示词末尾，如：高清、唯美、梦幻"
+                    }
+                }
+            },
+            "image_to_image": {
+                "description": "图生图配置（需用户上传参考图）",
+                "type": "object",
+                "items": {
+                    "enabled": {
+                        "description": "是否启用图生图",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "api_key": {
+                        "description": "Gitee AI API Key",
+                        "type": "string",
+                        "default": "",
+                        "hint": "从 https://ai.gitee.com 获取"
+                    },
+                    "model": {
+                        "description": "模型名称",
+                        "type": "string",
+                        "default": "FLUX.1-Kontext-dev",
+                        "hint": "推荐 FLUX.1-Kontext-dev"
+                    },
+                    "size": {
+                        "description": "图片尺寸",
+                        "type": "string",
+                        "default": "2048x2048",
+                        "hint": "格式: 宽x高"
+                    },
+                    "num_inference_steps": {
+                        "description": "推理步数 (0-50)",
+                        "type": "int",
+                        "default": 20,
+                        "slider": {"min": 0, "max": 50, "step": 1},
+                        "hint": "图生图推荐 20-30 步"
+                    },
+                    "cfg_scale": {
+                        "description": "提示词引导比例 (0-20)",
+                        "type": "float",
+                        "default": 2.5,
+                        "slider": {"min": 0, "max": 20, "step": 0.5},
+                        "hint": "图生图推荐 1.5-3.5"
+                    },
+                    "return_image_quality": {
+                        "description": "返回图片质量 (1-100)",
+                        "type": "int",
+                        "default": 80,
+                        "slider": {"min": 1, "max": 100, "step": 1},
+                        "hint": "质量越高文件越大"
+                    },
+                    "prompt_suffix": {
+                        "description": "提示词后缀",
+                        "type": "text",
+                        "default": "",
+                        "hint": "添加到提示词末尾"
+                    },
+                    "reference_images": {
+                        "type": "file",
+                        "description": "参考人像（可多张）",
+                        "hint": "建议上传清晰正脸照，可多张做不同角度参考。",
+                        "default": [],
+                        "file_types": ["jpg", "jpeg", "png", "webp"]
+                    },
+                    "reference_image_strategy": {
+                        "description": "多参考图使用策略",
+                        "type": "string",
+                        "enum": ["first", "random", "round_robin"],
+                        "default": "random",
+                        "hint": "first: 始终用第一张；random: 随机选择；round_robin: 顺序轮询"
+                    }
+                }
+            },
+            "common": {
+                "description": "公共配置",
+                "type": "object",
+                "items": {
+                    "auto_publish_probability": {
+                        "description": "自动发布时生成图片的概率 (0-1)",
+                        "type": "float",
+                        "default": 0.5,
+                        "slider": {"min": 0, "max": 1, "step": 0.05},
+                        "hint": "每次自动发说说时，按此概率决定是否生成图片"
+                    },
+                    "emo_probability": {
+                        "description": "emo模式生成图片的概率 (0-1)",
+                        "type": "float",
+                        "default": 0.3,
+                        "slider": {"min": 0, "max": 1, "step": 0.05},
+                        "hint": "每次emo动态发布时，按此概率决定是否生成图片"
+                    }
+                }
+            }
+        }
     }
 }
